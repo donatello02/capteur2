@@ -1,0 +1,158 @@
+#include "Timer.h"
+#include "MesureTemp.h"
+
+
+module MesureTempC {
+  uses {
+    interface SplitControl as Control;
+    interface Leds;
+    interface Boot;
+    interface Receive as AMReceive;
+    interface AMSend as AMSend;
+    interface Timer<TMilli> as MilliTimer;
+    interface Packet;
+    interface Read<u_int16_t> as TempRead;
+    
+    interface Receive as RadioReceive;
+    interface AMSend as RadioAMSend;
+    interface Packet as RadioPacket;
+    interface SplitControl as RadioControl;
+  }
+}
+implementation {
+  //packet pour le traitement sur l'interface AMSend et AMReceive
+  message_t packet;
+  //packet pour le traitement sur l'interface RadioAMSend et RadioAMReceive
+  message_t packet_radio;
+  
+  bool locked = FALSE;
+  bool locked_radio = FALSE;
+
+  event void Boot.booted()
+  {
+	  call Control.start();
+	  call RadioControl.start();
+  }
+
+  event void MilliTimer.fired() {
+  
+	  call TempRead.read();
+  }
+
+
+  event void Control.startDone(error_t err) {
+	  if (err == SUCCESS) {
+		  call MilliTimer.startPeriodic(1000);
+	  }
+  }
+  event void Control.stopDone(error_t err) {}
+
+  event void RadioControl.startDone(error_t err) {
+	  if (err == SUCCESS) {
+		  call MilliTimer.startPeriodic(1000);
+	  }
+  }
+  event void RadioControl.stopDone(error_t err) {}
+
+  
+  event void TempRead.readDone(error_t result, uint16_t data) {
+	  if (locked_radio) {
+		  return;
+	  }
+	  else {
+		  mesure_temp_msg_t* rsm;
+		  
+		  rsm = ( mesure_temp_msg_t*)call RadioPacket.getPayload(&packet_radio, sizeof( mesure_temp_msg_t));
+		  if (rsm == NULL) {
+			  return;
+		  }
+		  if (call Packet.maxPayloadLength() < sizeof( mesure_temp_msg_t)) {
+			  return;
+		  }
+		  data = -39.6 +0.01 * data;
+		  rsm->data = data;
+		  rsm->dest_id = NODE_MASTER_ID;
+		  rsm->src_id = TOS_NODE_ID;
+		  if (TOS_NODE_ID != NODE_MASTER_ID){
+		  if (call RadioAMSend.send(AM_BROADCAST_ADDR, &packet_radio, sizeof( mesure_temp_msg_t)) == SUCCESS) {
+			  locked_radio = TRUE;
+			  
+		    call Leds.led1Toggle();	
+		  }
+		  }
+		  else{;}
+	  }
+  }
+  
+  event void AMSend.sendDone(message_t* bufPtr, error_t error) {
+	  if (&packet == bufPtr) {
+		  locked = FALSE;
+	  }
+  }
+
+   event message_t* AMReceive.receive(message_t* bufPtr, 
+				    void* payload, uint8_t len) {
+	   if (len != sizeof(mesure_temp_msg_t)) {return bufPtr;}
+	   else {
+		   mesure_temp_msg_t* rsm = (mesure_temp_msg_t*)payload;
+		   if (rsm != NULL)
+		    call Leds.led0On();		  
+		  return bufPtr;
+	   }
+   }
+
+  event void RadioAMSend.sendDone(message_t* bufPtr, error_t error) {
+	  if (&packet_radio == bufPtr) {
+		  locked_radio = FALSE;
+	  }
+  }
+  
+  event message_t* RadioReceive.receive(message_t* bufPtr, void* payload, uint8_t len){
+	  if(len != sizeof(mesure_temp_msg_t)){return bufPtr;}
+	  else{
+		  mesure_temp_msg_t* rsmReceived = (mesure_temp_msg_t*)payload;
+		  if (locked) {
+			  return;
+		  }
+		  else {
+			  mesure_temp_msg_t* rsm = (mesure_temp_msg_t*)call Packet.getPayload(&packet, sizeof(mesure_temp_msg_t));
+			  if (rsm == NULL) {return;}
+			  if (call Packet.maxPayloadLength() < sizeof(mesure_temp_msg_t)) {
+				  return;
+			  }
+			  
+			  rsm->data = rsmReceived->data;
+			  rsm->src_id = rsmReceived->src_id;
+			  rsm->dest_id= rsmReceived->dest_id;
+			  if (TOS_NODE_ID == NODE_MASTER_ID || TOS_NODE_ID == 0){
+			    call Leds.led0Toggle();
+
+			    printf("[%d] de [%d] \n", rsm->data, rsm->src_id);
+		  
+			  if (call AMSend.send(AM_BROADCAST_ADDR, &packet, sizeof(mesure_temp_msg_t)) == SUCCESS) {
+				  locked = TRUE;
+			  }
+		    }
+		    else{
+		      
+			  call Leds.led2Toggle();
+		      
+			  printf("Node [%d] BCT [%d] de %d\n",TOS_NODE_ID, rsm->data, rsm->src_id);
+		  
+			      if (call RadioAMSend.send(0, &packet_radio, sizeof(mesure_temp_msg_t)) == SUCCESS) 
+				  {
+				  locked_radio = TRUE;
+				}
+			  
+		      }
+		      
+		      
+		    }
+		    return bufPtr;
+		  }
+		  
+	  }
+  
+  
+
+}

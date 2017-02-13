@@ -1,0 +1,17 @@
+#ifndef MESURE_TEMP_H
+#define MESURE_TEMP_H
+
+#include "stdio.h"
+#include "string.h"
+
+typedef nx_struct mesure_temp_msg {
+   nx_uint16_t data;
+  nx_uint16_t dest_id;
+  nx_uint16_t src_id;
+} mesure_temp_msg_t;
+
+enum {
+  AM_MESURE_TEMP_MSG = 7,
+};
+
+#endif
